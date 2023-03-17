@@ -42,7 +42,7 @@ def main(args):
         if os.path.exists(temp_init_checkpoint_path) is False:
             os.makedirs(temp_init_checkpoint_path)
         if use_wandb:
-            wandb.init(project="VisDrone", group="CAN", mode="offline", resume='allow', id='0iy0xlez')
+            wandb.init(project="VisDrone", group="CAN", mode="onfline", resume=False, id='0iy0xlez')
 
     # DataPath Shanghai_part_A
     # train_image_root = args.data_root + 'train_data/images'
@@ -125,15 +125,12 @@ def main(args):
 
     # ===================================== optimizer ===========================================
     pg = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.SGD(pg, lr,
-                                momentum=momentum,
-                                weight_decay=0)
-
+    optimizer = torch.optim.SGD(pg, lr, momentum=momentum, weight_decay=0)
+    # optimizer = torch.optim.AdamW(pg, lr=1e-3)
+    
     def lf(x): return ((1 + math.cos(x * math.pi / args.epochs)) / 2) * \
         (1 - args.lrf) + args.lrf  # cosine
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
-    # optimizer=torch.optim.Adam(model.parameters(),lr)
-
     # ========================================= train and eval ============================================
     min_mae = 10000
     min_epoch = 0

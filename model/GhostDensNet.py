@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-from torchstat import stat
+
 
 __all__ = ['ghostnetv2']
 
@@ -531,6 +531,7 @@ class GhostDensNet(nn.Module):
 
         self.stem = nn.Sequential(self.conv_stem, self.bn1, self.act1)
         
+        # blocks
         self.blocks = []
         layer_id = 0
         for layer_cfg in self.cfgs:
@@ -544,16 +545,14 @@ class GhostDensNet(nn.Module):
                                                 stride=layer_cfg[5],
                                                 layer_id=layer_id))
             layer_id += 1
-        backend_input_channel = _make_divisible(
-            multiplier * model_cfgs["backend_input_channel"])
-        self.blocks.append(ConvUnit(_make_divisible(multiplier * self.cfgs[-1][2]), backend_input_channel,
-                                    kernel_size=1, stride=1, padding=0, num_groups=1, use_act=True))
         self.blocks = nn.Sequential(*self.blocks)
         
-        self.backend_feat = [480, 480, 240, 120, 60]
+        # backend
+        self.backend_feat = [320, 160, 160, 80]
         self.backend = make_backend_layers(
-            self.backend_feat, in_channels=backend_input_channel, dilation=True)
-        self.output_layer = nn.Conv2d(60, 1, kernel_size=1)
+            self.backend_feat, in_channels=_make_divisible(multiplier * self.cfgs[-1][2]), dilation=True)
+        self.output_layer = nn.Conv2d(80, 1, kernel_size=1)
+        
         self._initialize_weights()
 
     def forward(self, x):
@@ -591,8 +590,6 @@ class GhostDensNet(nn.Module):
         """
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                nn.init.normal_(m.weight, std=np.sqrt(2. / n))
                 nn.init.normal_(m.weight, std=0.01)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
@@ -669,7 +666,7 @@ def ghostnetv2(model_name, USEGhostDensNet=False, **kwargs):
         
         "GDNet": {
             "cfg": [
-                # 3 -> 16
+                # stem: 3 -> 16, s = 2
                 # k, exp, c,  se,     nl,  s,
                 # stage1
                 [3, 16, 16, False, 'relu', 1],
@@ -681,19 +678,11 @@ def ghostnetv2(model_name, USEGhostDensNet=False, **kwargs):
                 [5, 120, 40, True, 'relu', 1],
                 # stage4
                 [3, 240, 80, False, 'relu', 2],
-                [3, 200, 80, False, 'relu', 1],
-                [3, 184, 80, False, 'relu', 1],
-                [3, 184, 80, False, 'relu', 1],
+                [3, 320, 80, False, 'relu', 1],
                 [3, 480, 112, True, 'relu', 1],
-                [3, 672, 112, True, 'relu', 1],
-                # stage5
-                [5, 672, 160, True, 'relu', 2],
-                [5, 960, 160, False, 'relu', 1],
+                [5, 720, 112, True, 'relu', 1],
                 [5, 960, 160, True, 'relu', 1],
-                [5, 960, 160, False, 'relu', 1],
-                [5, 960, 160, True, 'relu', 1]],
-                # c_out = 160
-            "backend_input_channel": 480
+                [5, 960, 160, True, 'relu', 1]]
         }
     }
     if USEGhostDensNet == True:
@@ -709,7 +698,10 @@ if __name__=='__main__':
     model = GDNet()
     model.eval()
     print(model)
-    stat(model, (3, 1920, 1080))
+    showstat = True
+    if showstat:
+        from torchstat import stat
+        stat(model, (3, 1920, 1080))
     input = torch.randn(1,3,1920,1080)
     y = model(input)
     print(y.size())
