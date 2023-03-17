@@ -3,4 +3,5 @@ wandb/
 data
 data/
 checkpoints/
+__pycache__/
 
