@@ -11,4 +11,5 @@ __pycache__/
 *.log.json
 *.pth
 *.pt
+.vscode
 __pycache__
