@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as CM
 from tqdm import tqdm
 
-from model.GhostDensNet import GhostDensNet
 from model.CrowdDataset import CrowdDataset
 from model.GhostDensNet import GDNet
 
