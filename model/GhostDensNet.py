@@ -548,7 +548,7 @@ class GhostDensNet(nn.Module):
         self.blocks = nn.Sequential(*self.blocks)
         
         # backend
-        self.backend_feat = [320, 160, 160, 80]
+        self.backend_feat = [320, 320, 240, 160, 80]
         self.backend = make_backend_layers(
             self.backend_feat, in_channels=_make_divisible(multiplier * self.cfgs[-1][2]), dilation=True)
         self.output_layer = nn.Conv2d(80, 1, kernel_size=1)
@@ -679,10 +679,10 @@ def ghostnetv2(model_name, USEGhostDensNet=False, **kwargs):
                 # stage4
                 [3, 240, 80, False, 'relu', 2],
                 [3, 320, 80, False, 'relu', 1],
-                [3, 480, 112, True, 'relu', 1],
-                [5, 720, 112, True, 'relu', 1],
-                [5, 960, 160, True, 'relu', 1],
-                [5, 960, 160, True, 'relu', 1]]
+                [3, 480, 160, True, 'relu', 1],
+                [5, 720, 160, True, 'relu', 1],
+                [5, 960, 320, True, 'relu', 1],
+                [5, 960, 320, True, 'relu', 1]]
         }
     }
     if USEGhostDensNet == True:

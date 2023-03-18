@@ -42,7 +42,7 @@ def main(args):
         if os.path.exists(temp_init_checkpoint_path) is False:
             os.makedirs(temp_init_checkpoint_path)
         if use_wandb:
-            wandb.init(project="VisDrone", group="CAN", mode="onfline", resume=False, id='0iy0xlez')
+            wandb.init(project="VisDrone", group="CAN", mode="online", resume='allow', name='GhostDensNet')
 
     # DataPath Shanghai_part_A
     # train_image_root = args.data_root + 'train_data/images'
@@ -170,7 +170,7 @@ def main(args):
                 wandb.log({'lr': optimizer.param_groups[0]["lr"]})
 
             # show an image
-            if show_images:
+            if show_images and use_wandb:
                 images = []
                 index = random.randint(0, len(test_loader)-1)
                 img, gt_dmap = test_dataset[index]
