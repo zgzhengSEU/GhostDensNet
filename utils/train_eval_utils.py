@@ -10,19 +10,21 @@ def train_one_epoch(model,
                     optimizer,
                     train_loader,
                     device,
-                    epoch):
+                    epoch,
+                    warmup_scheduler,
+                    lr_scheduler):
     model.train()
 
     criterion = torch.nn.MSELoss(reduction='sum').to(device)
 
     mean_loss = torch.zeros(1).to(device)
-    optimizer.zero_grad()
 
     # 在进程0中打印训练进度
     if is_main_process():
         train_loader = tqdm(train_loader, file=sys.stdout)
 
     for step, (img, gt_dmap) in enumerate(train_loader):
+        optimizer.zero_grad()
         img = img.to(device)
         gt_dmap = gt_dmap.to(device)
         # forward propagation
@@ -46,7 +48,8 @@ def train_one_epoch(model,
             sys.exit(1)
 
         optimizer.step()
-        optimizer.zero_grad()
+        with warmup_scheduler.dampening():
+            lr_scheduler.step()
 
     # 等待所有进程计算完毕
     if device != torch.device("cpu"):

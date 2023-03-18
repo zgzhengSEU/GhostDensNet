@@ -16,8 +16,9 @@ import argparse
 
 import tempfile
 import math
+import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
-
+import pytorch_warmup as warmup
 import wandb
 
 
@@ -59,7 +60,6 @@ def main(args):
     gpu_or_cpu = args.device  # use cuda or cpu
     lr = args.lr
     batch_size = args.batch_size
-    momentum = 0.95
     epochs = args.epochs
     num_workers = 1
     seed = time.time()
@@ -125,27 +125,26 @@ def main(args):
 
     # ===================================== optimizer ===========================================
     pg = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.SGD(pg, lr, momentum=momentum, weight_decay=0)
-    # optimizer = torch.optim.AdamW(pg, lr=1e-3)
-    
-    def lf(x): return ((1 + math.cos(x * math.pi / args.epochs)) / 2) * \
-        (1 - args.lrf) + args.lrf  # cosine
-    scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
+    optimizer = optim.AdamW(pg, lr=0.001, betas=(0.9, 0.999), weight_decay=0.01)
+    num_steps = len(train_loader) * epochs
+    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
+    warmup_scheduler = warmup.UntunedLinearWarmup(optimizer)
     # ========================================= train and eval ============================================
     min_mae = 10000
     min_epoch = 0
     for epoch in range(0, epochs):
         train_sampler.set_epoch(epoch)
 
+        # training phase
         mean_loss = train_one_epoch(
             model=model,
             optimizer=optimizer,
             train_loader=train_loader,
             device=device,
-            epoch=epoch
+            epoch=epoch,
+            warmup_scheduler=warmup_scheduler,
+            lr_scheduler=scheduler
         )
-
-        scheduler.step()
 
         # testing phase
         mae_sum = evaluate(
@@ -155,6 +154,7 @@ def main(args):
         )
 
         if rank == 0:
+            # eval and log
             mean_mae = mae_sum / test_sampler.total_size
             if mean_mae < min_mae:
                 min_mae = mean_mae
