@@ -6,4 +6,9 @@ checkpoints/
 __pycache__/
 *.pyc
 .vscode
+*.pkl
+*.pkl.json
+*.log.json
+*.pth
+*.pt
 __pycache__
