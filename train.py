@@ -3,9 +3,6 @@ import torch
 import os
 from tqdm import tqdm as tqdm
 import time
-import random
-from matplotlib import pyplot as plt
-import cv2
 
 from model.GhostDensNet import GDNet
 from model.CrowdDataset import CrowdDataset
@@ -13,9 +10,7 @@ from utils.distributed_utils import init_distributed_mode, dist, cleanup
 from utils.train_eval_utils import train_one_epoch, evaluate
 
 import argparse
-
 import tempfile
-import math
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 import pytorch_warmup as warmup
@@ -36,14 +31,22 @@ def main(args):
     show_images = args.show
 
     if rank == 0:  # 在第一个进程中打印信息，并实例化tensorboard
-        print("train start!", time.strftime(
-            '%Y.%m.%d %H:%M:%S', time.localtime(time.time())))
+        curtime = time.strftime(
+            '%Y.%m.%d %H:%M:%S', time.localtime(time.time()))
+        print(f"[train start! {curtime}]")
         print(args)
 
         if os.path.exists(temp_init_checkpoint_path) is False:
             os.makedirs(temp_init_checkpoint_path)
+        if os.path.exists('checkpoints/temp/') is False:
+            os.makedirs('checkpoints/temp/')
         if use_wandb:
-            wandb.init(project="VisDrone", group="CAN", mode="online", resume='allow', name='GhostDensNet')
+            wandb.init(
+                project="VisDrone",
+                group="CAN",
+                mode="online",
+                # resume='allow',
+                name='GhostDensNet')
 
     # DataPath Shanghai_part_A
     # train_image_root = args.data_root + 'train_data/images'
@@ -58,7 +61,8 @@ def main(args):
 
     # configuration
     gpu_or_cpu = args.device  # use cuda or cpu
-    lr = args.lr
+    # lr = args.lr
+    lr = 0.001
     batch_size = args.batch_size
     epochs = args.epochs
     num_workers = 1
@@ -84,7 +88,7 @@ def main(args):
         train_sampler, batch_size, drop_last=False)
 
     if rank == 0:
-        print('Using {} dataloader workers every process'.format(num_workers))
+        print(f'[Using {num_workers} dataloader workers every process]')
 
     train_loader = torch.utils.data.DataLoader(train_dataset,
                                                batch_sampler=train_batch_sampler)
@@ -99,15 +103,16 @@ def main(args):
     model = GDNet().to(device)
 
     if os.path.exists(init_checkpoint):
-        if rank == 0:
-            print('load checkpoint from {}'.format(init_checkpoint))
         weights_dict = torch.load(init_checkpoint, map_location=device)
         model.load_state_dict(weights_dict, strict=False)
+        if rank == 0:
+            print(f'[rank {rank} load checkpoint from {init_checkpoint}]')
     else:
         temp_init_checkpoint_path = os.path.join(
             tempfile.gettempdir(), "initial_weights.pth")
         # 如果不存在预训练权重，需要将第一个进程中的权重保存，然后其他进程载入，保持初始化权重一致
         if rank == 0:
+            print(f"[Use Temp Init Checkpoint: {temp_init_checkpoint_path}]")
             torch.save(model.state_dict(), temp_init_checkpoint_path)
 
         dist.barrier()
@@ -125,7 +130,7 @@ def main(args):
 
     # ===================================== optimizer ===========================================
     pg = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.AdamW(pg, lr=0.001, betas=(0.9, 0.999), weight_decay=0.01)
+    optimizer = optim.AdamW(pg, lr=lr, betas=(0.9, 0.999), weight_decay=0.01)
     num_steps = len(train_loader) * epochs
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
     warmup_scheduler = warmup.UntunedLinearWarmup(optimizer)
@@ -133,6 +138,9 @@ def main(args):
     min_mae = 10000
     min_epoch = 0
     for epoch in range(0, epochs):
+        if rank == 0:
+            print(f"[epoch {epoch}] start")
+
         train_sampler.set_epoch(epoch)
 
         # training phase
@@ -150,7 +158,10 @@ def main(args):
         mae_sum = evaluate(
             model=model,
             test_loader=test_loader,
-            device=device
+            device=device,
+            epoch=epoch,
+            show_images=show_images,
+            use_wandb=use_wandb
         )
 
         if rank == 0:
@@ -160,55 +171,19 @@ def main(args):
                 min_mae = mean_mae
                 min_epoch = epoch
                 torch.save(model.state_dict(),
-                           './checkpoints/epoch_{}.pth'.format(epoch))
+                           f'./checkpoints/epoch_{epoch}.pth')
 
-            print("[epoch {}] mae: {}, min_mae: {}, min_epoch: {}".format(
-                epoch, mean_mae, min_mae, min_epoch))
+            print(
+                f"[epoch {epoch}] mae: {mean_mae}, min_mae: {min_mae}, min_epoch: {min_epoch}")
+
             if use_wandb:
                 wandb.log({'loss': mean_loss})
                 wandb.log({'mae': mean_mae})
                 wandb.log({'lr': optimizer.param_groups[0]["lr"]})
+                print(f"[epoch {epoch}] wandb log done!")
 
-            # show an image
-            if show_images and use_wandb:
-                images = []
-                index = random.randint(0, len(test_loader)-1)
-                img, gt_dmap = test_dataset[index]
-                c, h, w = img.shape
-                images.append(wandb.Image(img, caption=f"image {epoch}"))
-
-                fig1 = plt.figure()
-                gt_dmap_np = gt_dmap.permute(1, 2, 0).numpy()
-                gt_dmap_np = cv2.resize(gt_dmap_np, dsize=(w, h))
-                plt.axis('off')
-                plt.imshow(img.permute(1, 2, 0).numpy())
-                plt.imshow(gt_dmap_np, alpha=0.5, cmap='turbo')
-                plt.savefig("checkpoints/temp.png",
-                            bbox_inches='tight', pad_inches=0)
-                plt.close(fig1)
-                images.append(wandb.Image(plt.imread(
-                    "checkpoints/temp.png"), caption=f"gt_density {epoch}"))
-
-                fig2 = plt.figure()
-                plt.axis('off')
-                plt.imshow(img.permute(1, 2, 0))
-                img = img.unsqueeze(0).to(device)
-                et_dmap = model(img)
-                et_dmap = et_dmap[0].detach().cpu()
-                et_dmap_np = et_dmap.permute(1, 2, 0).numpy()
-                et_dmap_np = cv2.resize(et_dmap_np, dsize=(w, h))
-                plt.imshow(et_dmap_np, alpha=0.5, cmap='turbo')
-                plt.savefig("checkpoints/temp.png",
-                            bbox_inches='tight', pad_inches=0)
-                plt.close(fig2)
-                images.append(wandb.Image(plt.imread(
-                    "checkpoints/temp.png"), caption=f"et_density {epoch}"))
-
-                wandb.log({"examples": [wandb.Image(im) for im in images]})
-
-    if rank == 0:
-        print("train done!", time.strftime(
-            '%Y.%m.%d %H:%M:%S', time.localtime(time.time())))
+            print(f"[epoch {epoch}] train done!", time.strftime(
+                '%Y.%m.%d %H:%M:%S', time.localtime(time.time())))
 
 
 if __name__ == "__main__":

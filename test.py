@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as CM
 from tqdm import tqdm
 
-from model.CANNet import CANNet
-from model.CrowdDatase import CrowdDataset
-
+from model.GhostDensNet import GhostDensNet
+from model.CrowdDataset import CrowdDataset
+from model.GhostDensNet import GDNet
 
 def cal_mae(img_root, gt_dmap_root, model_param_path):
     '''
@@ -15,7 +15,7 @@ def cal_mae(img_root, gt_dmap_root, model_param_path):
     model_param_path: the path of specific mcnn parameters.
     '''
     device = torch.device("cuda")
-    model = CANNet()
+    model = GDNet()
     model.load_state_dict(torch.load(model_param_path))
     model.to(device)
     dataset = CrowdDataset(img_root, gt_dmap_root, 8, phase='test')
@@ -44,7 +44,7 @@ def estimate_density_map(img_root, gt_dmap_root, model_param_path, index):
     index: the order of the test image in test dataset.
     '''
     device = torch.device("cuda")
-    model = CANNet().to(device)
+    model = GDNet().to(device)
     model.load_state_dict(torch.load(model_param_path))
     dataset = CrowdDataset(img_root, gt_dmap_root, 8, phase='test')
     dataloader = torch.utils.data.DataLoader(

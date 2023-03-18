@@ -2,8 +2,12 @@ import sys
 
 from tqdm import tqdm
 import torch
-
+import random
+from matplotlib import pyplot as plt
+import cv2
 from .distributed_utils import reduce_value, is_main_process
+import wandb
+from torchvision import transforms
 
 
 def train_one_epoch(model,
@@ -61,7 +65,10 @@ def train_one_epoch(model,
 @torch.no_grad()
 def evaluate(model,
              test_loader,
-             device):
+             device,
+             epoch,
+             show_images=False,
+             use_wandb=False):
     model.eval()
 
     mae = torch.zeros(1).to(device)
@@ -70,12 +77,60 @@ def evaluate(model,
     if is_main_process():
         test_loader = tqdm(test_loader, file=sys.stdout)
 
+    index = random.randint(0, len(test_loader)-1)
+
     for step, (img, gt_dmap) in enumerate(test_loader):
         img = img.to(device)
         gt_dmap = gt_dmap.to(device)
         # forward propagation
         et_dmap = model(img)
         mae += torch.abs(et_dmap.data.sum() - gt_dmap.data.sum())
+
+        if is_main_process():
+            test_loader.desc = f"[epoch {epoch}]"
+
+            if step == index and show_images:
+                images = []
+                # ============= img ==========
+                _, h, w = img[0].shape
+                inv_normalize = transforms.Normalize(
+                    mean=[-0.485/0.229, -0.456/0.224, -0.406/0.255],
+                    std=[1/0.229, 1/0.224, 1/0.255]
+                )
+                img_np = inv_normalize(img[0]).permute(1, 2, 0).cpu().numpy()
+                # ============= gt ===========
+                fig1 = plt.figure()
+                plt.axis('off')
+                plt.imshow(img_np)
+                gt_dmap_np = gt_dmap[0].permute(1, 2, 0).cpu().numpy()
+                gt_dmap_np = cv2.resize(gt_dmap_np, dsize=(w, h))
+                plt.imshow(gt_dmap_np, alpha=0.5, cmap='turbo')
+                fig1.savefig(f"checkpoints/temp/temp_gt_{epoch}.png",
+                             bbox_inches='tight', pad_inches=0)
+                fig1.clear()
+                plt.close('all')
+                # ============ et ==============
+                fig2 = plt.figure()
+                plt.axis('off')
+                plt.imshow(img_np)
+                et_dmap_np = et_dmap[0].permute(1, 2, 0).cpu().numpy()
+                et_dmap_np = cv2.resize(et_dmap_np, dsize=(w, h))
+                plt.imshow(et_dmap_np, alpha=0.5, cmap='turbo')
+                fig2.savefig(f"checkpoints/temp/temp_et_{epoch}.png",
+                             bbox_inches='tight', pad_inches=0)
+                fig2.clear()
+                plt.close('all')
+                # =========== upload ============
+                if use_wandb:
+                    images.append(wandb.Image(
+                        img_np, caption=f"image {epoch}"))
+                    images.append(wandb.Image(plt.imread(
+                        f"checkpoints/temp/temp_gt_{epoch}.png"), caption=f"gt_density {epoch}"))
+                    images.append(wandb.Image(plt.imread(
+                        f"checkpoints/temp/temp_et_{epoch}.png"), caption=f"et_density {epoch}"))
+                    wandb.log({"examples": [wandb.Image(im) for im in images]})
+                    print(f"[epoch {epoch}] wandb upload img done!")
+
         del img, gt_dmap, et_dmap
 
     # 等待所有进程计算完毕
