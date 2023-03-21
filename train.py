@@ -53,13 +53,14 @@ def main(args):
     if rank == 0:  # 在第一个进程中打印信息，并实例化tensorboard
         curtime = time.strftime(
             '%Y.%m.%d %H:%M:%S', time.localtime(time.time()))
-        print(f"[train start! {curtime}]")
+        print(f"[{curtime}] {args.world_size} GPU train start!")
         print(args)
 
         if os.path.exists(temp_init_checkpoint_path) is False:
             os.makedirs(temp_init_checkpoint_path)
         if os.path.exists('checkpoints/temp/') is False:
             os.makedirs('checkpoints/temp/')
+        
         if use_wandb:
             wandb.init(
                 project="VisDrone",
@@ -185,8 +186,8 @@ def main(args):
             mean_mae = mae_sum / test_sampler.total_size
             mean_mse = mse_sum / test_sampler.total_size
             # checkpoints
-            if os.path.exists(f'./checkpoints/epoch_{epoch - 1}.pth') is True:
-                os.remove(f'./checkpoints/epoch_{epoch - 1}.pth')
+            if os.path.exists(f'./checkpoints/epoch_{epoch - 1}.pth.tar') is True:
+                os.remove(f'./checkpoints/epoch_{epoch - 1}.pth.tar')
 
             checkpoint_dict = {
                 'epoch': epoch,
@@ -194,13 +195,13 @@ def main(args):
                 'optim_state_dict': optimizer.state_dict(),
                 'scheduler': scheduler.state_dict(),
                 'warmup_scheduler': warmup_scheduler.state_dict()}
-            torch.save(checkpoint_dict, f'./checkpoints/epoch_{epoch}.pth')
+            torch.save(checkpoint_dict, f'./checkpoints/epoch_{epoch}.pth.tar')
 
             if mean_mae < min_mae:
                 min_mae = mean_mae
                 min_epoch = epoch
                 torch.save(checkpoint_dict,
-                           f'./checkpoints/best_epoch_{epoch}.pth')
+                           f'./checkpoints/best_epoch_{epoch}.pth.tar')
             
             if mean_mse < min_mse:
                 min_mse = mean_mse
