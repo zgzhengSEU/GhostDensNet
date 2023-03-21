@@ -2,6 +2,7 @@ import sys
 
 from tqdm import tqdm
 import torch
+from torch import nn
 import random
 from matplotlib import pyplot as plt
 import cv2
@@ -15,11 +16,11 @@ def train_one_epoch(model,
                     train_loader,
                     device,
                     epoch,
-                    warmup_scheduler,
-                    lr_scheduler):
+                    lr_scheduler,
+                    warmup_scheduler):
     model.train()
 
-    criterion = torch.nn.MSELoss(reduction='sum').to(device)
+    criterion = nn.MSELoss(reduction='sum').to(device)
 
     mean_loss = torch.zeros(1).to(device)
 
@@ -72,7 +73,7 @@ def evaluate(model,
     model.eval()
 
     mae = torch.zeros(1).to(device)
-
+    mse = torch.zeros(1).to(device)
     # 在进程0中打印验证进度
     if is_main_process():
         test_loader = tqdm(test_loader, file=sys.stdout)
@@ -84,8 +85,9 @@ def evaluate(model,
         gt_dmap = gt_dmap.to(device)
         # forward propagation
         et_dmap = model(img)
-        mae += torch.abs(et_dmap.data.sum() - gt_dmap.data.sum())
-
+        diff = abs(et_dmap.data.sum() - gt_dmap.data.sum())
+        mae += diff
+        mse += diff * diff
         if is_main_process():
             test_loader.desc = f"[epoch {epoch}]"
 
@@ -138,5 +140,5 @@ def evaluate(model,
         torch.cuda.synchronize(device)
 
     mae_sum = reduce_value(mae, average=False)
-
-    return mae_sum.item()
+    mse_sum = reduce_value(mse, average=False)
+    return mae_sum.item(), mse_sum.item()

@@ -16,19 +16,39 @@ import torch.optim.lr_scheduler as lr_scheduler
 import pytorch_warmup as warmup
 import wandb
 
+"""
+    CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 --use_env train.py   
+    CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 --use_env train.py   
+    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 python -m torch.distributed.launch --nproc_per_node=6 --use_env train.py
+"""
+
 
 def main(args):
     if torch.cuda.is_available() is False:
         raise EnvironmentError("not find GPU device for training.")
 
     init_distributed_mode(args=args)
-
     rank = args.rank
-    init_checkpoint = args.init_checkpoint
     args.lr *= args.world_size  # 学习率要根据并行GPU的数量进行倍增
+
+    # configuration
+
+    init_checkpoint = args.init_checkpoint
     temp_init_checkpoint_path = "checkpoints"
+    resume_checkpoint = args.resume_checkpoint
+
     use_wandb = args.wandb
-    show_images = args.show
+    show_images = args.show_images
+    resume = args.resume
+
+    lr = args.lr
+    gpu_or_cpu = args.device  # use cuda or cpu
+    batch_size = args.batch_size
+
+    start_epoch = 0
+    epochs = args.epochs
+    num_workers = 2
+    seed = time.time()
 
     if rank == 0:  # 在第一个进程中打印信息，并实例化tensorboard
         curtime = time.strftime(
@@ -48,32 +68,20 @@ def main(args):
                 # resume='allow',
                 name='GhostDensNet')
 
+    # ======================== cuda ====================================
+    device = torch.device(gpu_or_cpu)
+    torch.cuda.manual_seed(seed)
+    # ==================================== data ==================
     # DataPath Shanghai_part_A
     # train_image_root = args.data_root + 'train_data/images'
     # train_dmap_root = args.data_root + 'train_data/ground_truth'
     # test_image_root = args.data_root + '.test_data/images'
     # test_dmap_root = args.data_root + '.test_data/ground_truth'
-
     train_image_root = 'data/VisDrone/images/train'
     train_dmap_root = 'data/Density-VisDrone/DMNdata/train/dens'
     test_image_root = 'data/VisDrone/images/val'
     test_dmap_root = 'data/Density-VisDrone/DMNdata/val/dens'
 
-    # configuration
-    gpu_or_cpu = args.device  # use cuda or cpu
-    # lr = args.lr
-    lr = 0.001
-    batch_size = args.batch_size
-    epochs = args.epochs
-    num_workers = 1
-    seed = time.time()
-
-    # ======================== cuda ====================================
-
-    device = torch.device(gpu_or_cpu)
-    torch.cuda.manual_seed(seed)
-
-    # ==================================== dataloader ==================
     train_dataset = CrowdDataset(
         train_image_root, train_dmap_root, gt_downsample=8, phase='train')
     test_dataset = CrowdDataset(
@@ -87,12 +95,8 @@ def main(args):
     train_batch_sampler = torch.utils.data.BatchSampler(
         train_sampler, batch_size, drop_last=False)
 
-    if rank == 0:
-        print(f'[Using {num_workers} dataloader workers every process]')
-
     train_loader = torch.utils.data.DataLoader(train_dataset,
                                                batch_sampler=train_batch_sampler)
-
     test_loader = torch.utils.data.DataLoader(test_dataset,
                                               sampler=test_sampler,
                                               num_workers=num_workers,
@@ -102,11 +106,27 @@ def main(args):
     # ========================================= model ===========================
     model = GDNet().to(device)
 
-    if os.path.exists(init_checkpoint):
+    if args.syncBN:
+        # 使用SyncBatchNorm后训练会更耗时
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
+
+    if resume:
+        resume_load_checkpoint = torch.load(resume_checkpoint)
+        start_epoch = resume_load_checkpoint['epoch']
+        model.load_state_dict(resume_load_checkpoint['net'])
+        optimizer.load_state_dict(resume_load_checkpoint['optimizer'])
+        scheduler.load_state_dict(resume_load_checkpoint['scheduler'])
+        warmup_scheduler.load_state_dict(
+            resume_load_checkpoint['warmup_scheduler'])
+        if rank == 0:
+            print(f"[Resume Train, Use Checkpoint: {resume_checkpoint}]")
+
+    elif os.path.exists(init_checkpoint):
         weights_dict = torch.load(init_checkpoint, map_location=device)
         model.load_state_dict(weights_dict, strict=False)
         if rank == 0:
             print(f'[rank {rank} load checkpoint from {init_checkpoint}]')
+
     else:
         temp_init_checkpoint_path = os.path.join(
             tempfile.gettempdir(), "initial_weights.pth")
@@ -120,27 +140,23 @@ def main(args):
         model.load_state_dict(torch.load(
             temp_init_checkpoint_path, map_location=device))
 
-    if args.syncBN:
-        # 使用SyncBatchNorm后训练会更耗时
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
-
     # 转为DDP模型
     model = torch.nn.parallel.DistributedDataParallel(
         model, device_ids=[args.gpu])
 
     # ===================================== optimizer ===========================================
     pg = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.AdamW(pg, lr=lr, betas=(0.9, 0.999), weight_decay=0.01)
     num_steps = len(train_loader) * epochs
-    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
-    warmup_scheduler = warmup.UntunedLinearWarmup(optimizer)
+    if not resume:
+        optimizer = optim.AdamW(pg, lr=lr, betas=(
+            0.9, 0.999), weight_decay=0.01)
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
+        warmup_scheduler = warmup.UntunedLinearWarmup(optimizer)
     # ========================================= train and eval ============================================
     min_mae = 10000
+    min_mse = 100000000
     min_epoch = 0
-    for epoch in range(0, epochs):
-        if rank == 0:
-            print(f"[epoch {epoch}] start")
-
+    for epoch in range(start_epoch, epochs):
         train_sampler.set_epoch(epoch)
 
         # training phase
@@ -150,12 +166,12 @@ def main(args):
             train_loader=train_loader,
             device=device,
             epoch=epoch,
-            warmup_scheduler=warmup_scheduler,
-            lr_scheduler=scheduler
+            lr_scheduler=scheduler,
+            warmup_scheduler=warmup_scheduler
         )
 
         # testing phase
-        mae_sum = evaluate(
+        mae_sum, mse_sum = evaluate(
             model=model,
             test_loader=test_loader,
             device=device,
@@ -167,36 +183,52 @@ def main(args):
         if rank == 0:
             # eval and log
             mean_mae = mae_sum / test_sampler.total_size
+            mean_mse = mse_sum / test_sampler.total_size
+            # checkpoints
+            if os.path.exists(f'./checkpoints/epoch_{epoch - 1}.pth') is True:
+                os.remove(f'./checkpoints/epoch_{epoch - 1}.pth')
+
+            checkpoint_dict = {
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optim_state_dict': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
+                'warmup_scheduler': warmup_scheduler.state_dict()}
+            torch.save(checkpoint_dict, f'./checkpoints/epoch_{epoch}.pth')
+
             if mean_mae < min_mae:
                 min_mae = mean_mae
                 min_epoch = epoch
-                torch.save(model.state_dict(),
-                           f'./checkpoints/epoch_{epoch}.pth')
-
+                torch.save(checkpoint_dict,
+                           f'./checkpoints/best_epoch_{epoch}.pth')
+            
+            if mean_mse < min_mse:
+                min_mse = mean_mse
+            
             print(
-                f"[epoch {epoch}] mae: {mean_mae}, min_mae: {min_mae}, min_epoch: {min_epoch}")
+                f"[epoch {epoch}] mae: {mean_mae}, min_mae: {min_mae}, min_mse: {min_mse}, best_epoch: {min_epoch}")
 
             if use_wandb:
-                wandb.log({'loss': mean_loss})
-                wandb.log({'mae': mean_mae})
+                wandb.log({'MSELoss': mean_loss})
+                wandb.log({'MAE': mean_mae})
+                wandb.log({'MSE': mean_mse})
                 wandb.log({'lr': optimizer.param_groups[0]["lr"]})
                 print(f"[epoch {epoch}] wandb log done!")
-
-            print(f"[epoch {epoch}] train done!", time.strftime(
-                '%Y.%m.%d %H:%M:%S', time.localtime(time.time())))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=500)
-    parser.add_argument('--batch-size', type=int, default=1)
-    parser.add_argument('--lr', type=float, default=1e-7)
-    parser.add_argument('--lrf', type=float, default=0.1)
-    parser.add_argument('--syncBN', type=bool, default=True)
-    parser.add_argument('--wandb', type=bool, default=True)
-    parser.add_argument('--show', type=bool, default=True)
     parser.add_argument('--data_root', type=str,
                         default="./data/Shanghai_part_A/")
+    parser.add_argument('--epochs', type=int, default=300)
+    parser.add_argument('--batch-size', type=int, default=1)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--syncBN', type=bool, default=True)
+    parser.add_argument('--wandb', type=bool, default=True)
+    parser.add_argument('--show_images', type=bool, default=True)
+    parser.add_argument('--resume', type=bool, default=False)
+    parser.add_argument('--resume_checkpoint', type=str, default='',
+                        help='resume checkpoint path')
     parser.add_argument('--init_checkpoint', type=str, default='',
                         help='initial weights path')
     # 不要改该参数，系统会自动分配
