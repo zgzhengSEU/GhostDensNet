@@ -3,7 +3,8 @@ wandb/
 data
 data/
 checkpoints/
-__pycache__/
+model/__pycache__/
+utils/__pycache__/
 *.pyc
 .vscode
 *.pkl
