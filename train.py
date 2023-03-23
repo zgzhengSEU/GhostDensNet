@@ -150,12 +150,12 @@ def main(args):
     num_steps = len(train_loader) * epochs
     if not resume:
         optimizer = optim.AdamW(pg, lr=lr, betas=(
-            0.9, 0.999), weight_decay=0.01)
+            0.9, 0.999), weight_decay=1e-4)
         scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
-        warmup_scheduler = warmup.UntunedLinearWarmup(optimizer)
+        warmup_scheduler = warmup.UntunedExponentialWarmup(optimizer)
     # ========================================= train and eval ============================================
     min_mae = 10000
-    min_mse = 100000000
+    min_mse = 10000
     min_epoch = 0
     for epoch in range(start_epoch, epochs):
         train_sampler.set_epoch(epoch)
@@ -223,7 +223,7 @@ if __name__ == "__main__":
                         default="./data/Shanghai_part_A/")
     parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--batch-size', type=int, default=1)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr', type=float, default=1e-5)
     parser.add_argument('--syncBN', type=bool, default=True)
     parser.add_argument('--wandb', type=bool, default=True)
     parser.add_argument('--show_images', type=bool, default=True)
