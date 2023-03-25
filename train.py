@@ -40,7 +40,8 @@ def main(args):
     use_wandb = args.wandb
     show_images = args.show_images
     resume = args.resume
-
+    resume_id = args.resume_id
+    
     lr = args.lr
     gpu_or_cpu = args.device  # use cuda or cpu
     batch_size = args.batch_size
@@ -62,12 +63,20 @@ def main(args):
             os.makedirs('checkpoints/temp/')
         
         if use_wandb:
-            wandb.init(
-                project="VisDrone",
-                group="CAN",
-                mode="online",
-                # resume='allow',
-                name='GhostDensNet')
+            if resume:
+                wandb.init(
+                    project="VisDrone",
+                    group="CAN",
+                    mode="online",
+                    resume='allow',
+                    id = resume_id,
+                    name='GhostDensNet')
+            else:
+                wandb.init(
+                    project="VisDrone",
+                    group="CAN",
+                    mode="online",
+                    name='GhostDensNet')
 
     # ======================== cuda ====================================
     device = torch.device(gpu_or_cpu)
@@ -106,19 +115,32 @@ def main(args):
 
     # ========================================= model ===========================
     model = GDNet().to(device)
-
+    
     if args.syncBN:
         # 使用SyncBatchNorm后训练会更耗时
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
-
+        
+    # 转为DDP模型
+    model = torch.nn.parallel.DistributedDataParallel(
+        model, device_ids=[args.gpu])
+    
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint)
         start_epoch = resume_load_checkpoint['epoch']
-        model.load_state_dict(resume_load_checkpoint['net'])
-        optimizer.load_state_dict(resume_load_checkpoint['optimizer'])
+        model.load_state_dict(resume_load_checkpoint['model_state_dict'])
+        # ========================= optimizer ===================================
+        pg = [p for p in model.parameters() if p.requires_grad]
+        num_steps = len(train_loader) * epochs
+        optimizer = optim.AdamW(pg, lr=lr, betas=(
+            0.9, 0.999), weight_decay=1e-4)
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
+        warmup_scheduler = warmup.UntunedExponentialWarmup(optimizer)
+        
+        optimizer.load_state_dict(resume_load_checkpoint['optim_state_dict'])
         scheduler.load_state_dict(resume_load_checkpoint['scheduler'])
         warmup_scheduler.load_state_dict(
             resume_load_checkpoint['warmup_scheduler'])
+        
         if rank == 0:
             print(f"[Resume Train, Use Checkpoint: {resume_checkpoint}]")
 
@@ -140,15 +162,11 @@ def main(args):
         # 这里注意，一定要指定map_location参数，否则会导致第一块GPU占用更多资源
         model.load_state_dict(torch.load(
             temp_init_checkpoint_path, map_location=device))
-
-    # 转为DDP模型
-    model = torch.nn.parallel.DistributedDataParallel(
-        model, device_ids=[args.gpu])
-
+        
     # ===================================== optimizer ===========================================
-    pg = [p for p in model.parameters() if p.requires_grad]
-    num_steps = len(train_loader) * epochs
     if not resume:
+        pg = [p for p in model.parameters() if p.requires_grad]
+        num_steps = len(train_loader) * epochs
         optimizer = optim.AdamW(pg, lr=lr, betas=(
             0.9, 0.999), weight_decay=1e-4)
         scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
@@ -227,8 +245,9 @@ if __name__ == "__main__":
     parser.add_argument('--syncBN', type=bool, default=True)
     parser.add_argument('--wandb', type=bool, default=True)
     parser.add_argument('--show_images', type=bool, default=True)
-    parser.add_argument('--resume', type=bool, default=False)
-    parser.add_argument('--resume_checkpoint', type=str, default='',
+    parser.add_argument('--resume', type=bool, default=True)
+    parser.add_argument('--resume_id', type=str, default='5tpdfo8k')
+    parser.add_argument('--resume_checkpoint', type=str, default='checkpoints/epoch_182.pth.tar',
                         help='resume checkpoint path')
     parser.add_argument('--init_checkpoint', type=str, default='',
                         help='initial weights path')
