@@ -601,6 +601,153 @@ class GhostDensNet(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
+class GhostDensNetFPN(nn.Module):
+    """
+    GhostNet architecture.
+
+    Args:
+        model_cfgs (Cell): number of classes.
+        num_classes (int): Output number classes.
+        multiplier (int): Channels multiplier for round to 8/16 and others. Default is 1.
+        final_drop (float): Dropout number.
+        round_nearest (list): Channel round to . Default is 8.
+    Returns:
+        Tensor, output tensor.
+
+    Examples:
+        >>> GhostNet(num_classes=1000)
+    """
+
+    def __init__(self, multiplier=1.):
+        super(GhostDensNetFPN, self).__init__()
+        self.cfgs = [
+                # k, exp, c,  se,     nl,  s,
+                # stage1
+                [[3, 16, 16, False, 'relu', 1]],
+                # stage2
+                [[3, 48, 24, False, 'relu', 2],
+                [3, 72, 24, False, 'relu', 1],
+                [5, 72, 40, True, 'relu', 1],
+                [5, 120, 40, True, 'relu', 1]],
+                # stage3
+                [[3, 240, 80, False, 'relu', 2],
+                [3, 200, 80, False, 'relu', 1],
+                [3, 184, 80, False, 'relu', 1],
+                [3, 184, 80, False, 'relu', 1],
+                [3, 480, 112, True, 'relu', 1],
+                [3, 672, 112, True, 'relu', 1]],
+                # stage4
+                [[5, 672, 160, True, 'relu', 2],
+                [5, 960, 160, False, 'relu', 1],
+                [5, 960, 160, True, 'relu', 1],
+                [5, 960, 160, False, 'relu', 1],
+                [5, 960, 160, True, 'relu', 1]]]
+        self.inplanes = 16
+        first_conv_in_channel = 3
+        first_conv_out_channel = _make_divisible(multiplier * self.inplanes)
+
+        self.conv_stem = nn.Conv2d(in_channels=first_conv_in_channel,
+                                   out_channels=first_conv_out_channel,
+                                   kernel_size=3, padding=1, stride=2,
+                                   bias=False, padding_mode='zeros')
+        self.bn1 = nn.BatchNorm2d(first_conv_out_channel)
+        self.act1 = Activation('relu')
+
+        self.stem = nn.Sequential(self.conv_stem, self.bn1, self.act1)
+        
+        # stages
+        layer_id = 0
+        for i, stage_cfg in enumerate(self.cfgs):
+            stage = []
+            for layer_cfg in stage_cfg:
+                stage.append(self._make_layer(kernel_size=layer_cfg[0],
+                                                    exp_ch=_make_divisible(
+                                                        multiplier * layer_cfg[1]),
+                                                    out_channel=_make_divisible(
+                                                        multiplier * layer_cfg[2]),
+                                                    use_se=layer_cfg[3],
+                                                    act_func=layer_cfg[4],
+                                                    stride=layer_cfg[5],
+                                                    layer_id=layer_id))
+                layer_id += 1
+            if i == 0:
+                self.stage1 = nn.Sequential(*stage)
+            elif i == 1:
+                self.stage2 = nn.Sequential(*stage)
+            elif i == 2:
+                self.stage3 = nn.Sequential(*stage)
+            elif i == 3:
+                self.stage4 = nn.Sequential(*stage)
+            
+        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        # backend
+        self.backend_feat_p2 = [40, 40]
+        self.backend_feat_p3 = [112, 112]
+        self.backend_feat_p4 = [160, 160]
+        self.backend_p2 = make_backend_layers(
+            self.backend_feat_p2, in_channels=_make_divisible(multiplier * self.cfgs[1][-1][2]), dilation=True)
+        self.backend_p3 = make_backend_layers(
+            self.backend_feat_p3, in_channels=_make_divisible(multiplier * self.cfgs[2][-1][2]), dilation=True)
+        self.backend_p4 = make_backend_layers(
+            self.backend_feat_p4, in_channels=_make_divisible(multiplier * self.cfgs[3][-1][2]), dilation=True)
+        self.output_layer = nn.Conv2d(312, 1, kernel_size=1)
+        
+        self._initialize_weights()
+
+    def forward(self, x):
+        """ forward of GhostNet """
+        # in 3, out 16, k 3, s 1
+        h, w = x.shape[2:4]
+        h //= 8
+        w //= 8
+        x = self.stem(x)
+        x = self.stage1(x)
+        x_p2 = self.stage2(x)
+        x_p3 = self.stage3(x_p2)
+        x_p4 = self.stage4(x_p3)
+        
+        x_p2 = self.maxpool(self.backend_p2(x_p2))
+        x_p3 = self.backend_p3(x_p3)
+        x_p4 = self.backend_p4(x_p4)
+        x_p4 = F.interpolate(x_p4, size=(h, w), mode='bilinear', align_corners=True)
+        
+        out = self.output_layer(torch.cat([x_p2, x_p3, x_p4], dim=1))
+        # out = F.interpolate(out, size=(h, w), mode='bilinear', align_corners=True)
+        return out
+
+    def _make_layer(self, kernel_size, exp_ch, out_channel, use_se, act_func, stride=1, layer_id=0):
+        mid_planes = exp_ch
+        out_planes = out_channel
+        layer = GhostBottleneck(self.inplanes, mid_planes, out_planes,
+                                kernel_size, stride=stride, act_type=act_func, use_se=use_se, layer_id=layer_id)
+        self.inplanes = out_planes
+        return layer
+
+    def _initialize_weights(self):
+        """
+        Initialize weights.
+
+        Args:
+
+        Returns:
+            None.
+
+        Examples:
+            >>> _initialize_weights()
+        """
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
 
 
 def ghostnetv2(model_name, USEGhostDensNet=False, **kwargs):
@@ -683,27 +830,6 @@ def ghostnetv2(model_name, USEGhostDensNet=False, **kwargs):
                 [5, 720, 160, True, 'relu', 1],
                 [5, 960, 320, True, 'relu', 1],
                 [5, 960, 320, True, 'relu', 1]]
-        },
-        
-        "GDNetmulti":{
-            "cfg": [
-                # stem: 3 -> 16, s = 2
-                # k, exp, c,  se,     nl,  s,
-                # stage1
-                [3, 16, 16, False, 'relu', 1],
-                # stage2
-                [3, 48, 24, False, 'relu', 2],
-                [3, 72, 24, False, 'relu', 1],
-                # stage3
-                [5, 72, 40, True, 'relu', 1],
-                [5, 120, 40, True, 'relu', 1],
-                # stage4
-                [3, 240, 80, False, 'relu', 2],
-                [3, 320, 80, False, 'relu', 1],
-                [3, 480, 112, True, 'relu', 1],
-                [5, 720, 112, True, 'relu', 1],
-                [5, 960, 160, True, 'relu', 1],
-                [5, 960, 160, True, 'relu', 1]]
         }
     }
     if USEGhostDensNet == True:
@@ -716,7 +842,7 @@ ghostnetv2_nose_1x = partial(ghostnetv2, model_name="nose_1x", final_drop=0.8)
 GDNet = partial(ghostnetv2, model_name="GDNet", USEGhostDensNet=True)
 
 if __name__=='__main__':
-    model = ghostnetv2_1x()
+    model = GhostDensNetFPN()
     model.eval()
     print(model)
     showstat = True
