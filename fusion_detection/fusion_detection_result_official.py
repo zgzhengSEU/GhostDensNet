@@ -17,7 +17,7 @@ Code revised on : 7/18/2020
 The data should be arranged in following structure before you call any function within this script:
 dataset(Train/val/test)
 -----mode(Train/val/test)
-------Global
+------Global 全局 local 局部
 --------images
 --------Annotations (Optional, not available only when you conduct inference steps)
 ------Density
@@ -33,9 +33,9 @@ python fusion_detection_result_official.py crop_data_fusion_mcnn --mode val
 def parse_args():
     parser = argparse.ArgumentParser(
         description='DMNet -- Global-local fusion detection')
-    parser.add_argument('root_dir', default=".",
+    parser.add_argument('--root_dir', default="/import/gp-home.cal/duanct/openmmlab/GhostDensNet/data/DensVisDrone",
                         help='the path for source data')
-    parser.add_argument('--mode', default="train", help='Indicate if you are working on train/val/test set')
+    parser.add_argument('--mode', default="val", help='Indicate if you are working on train/val/test set')
     parser.add_argument('--truncate_threshold', type=float, default=0,
                         help='Threshold defined to select the cropped region')
     parser.add_argument('--iou_threshold', type=float, default=0.7,
@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument('--TopN', type=int, default=500,
                         help='Only keep TopN bboxes with highest score, default value 500, '
                              'enforced by visiondrone competition')
-    parser.add_argument('--show', type=bool, default=True, help='Need to keep original image?')
+    parser.add_argument('--show', type=bool, default=False, help='Need to keep original image?')
     args = parser.parse_args()
     return args
 
@@ -60,17 +60,17 @@ if __name__ == "__main__":
     folder_name = args.root_dir # 数据集根目录
     classList = ["pedestrian", "people", "bicycle", "car", "van", "truck", "tricycle", "awning-tricycle",
                  "bus", "motor"]
-    img_path = os.path.join(folder_name, "global", "images", mode)
-    dens_path = os.path.join(folder_name, "density", "images", mode)
-    img_gt_file = os.path.join(folder_name, "global", mode + ".json")
-    img_detection_file = os.path.join(mode + "_global_result.bbox.json")
-    dens_gt_file = os.path.join(folder_name, "density", mode + ".json")
-    dens_detection_file = os.path.join(mode + ".bbox.json")
-    output_file = os.path.join(folder_name, "global", mode, "final_fusion_result")
+    img_path = os.path.join(folder_name, "images", 'val')
+    dens_path = os.path.join(folder_name, "images", 'singledensval')
+    img_gt_file = os.path.join(folder_name, "annotations", "val.json")
+    img_detection_file = os.path.join(folder_name,'detect_json',"val.bbox.json")
+    dens_gt_file = os.path.join(folder_name, "annotations", "singledensval.json")
+    dens_detection_file = os.path.join(folder_name,'detect_json',"singledensval.bbox.json")
+    output_file = os.path.join(folder_name, "detect_json", "final_fusion_result")
 
     # use coco api to retrieve detection result.
-    # global == all_image 
-    # dens == density map
+    # global == 原图 全局检测
+    # dens == density map 裁剪图 局部检测
     cocoGt_global = COCO(img_gt_file)
     cocoDt_global = cocoGt_global.loadRes(img_detection_file)
     cocoGt_density = COCO(dens_gt_file)
@@ -94,11 +94,10 @@ if __name__ == "__main__":
     # We have to match the idx for both density crops and original images, otherwise
     # we will have issues when merging them
     # dens_img_name : dens_img_id
-    crop_img_matcher = {cocoDt_density.loadImgs(idx)[0]["file_name"]: cocoDt_density.loadImgs(idx)[0]["id"]
-                        for idx in range(len(dens_list))}
+    crop_img_matcher = {cocoDt_density.loadImgs(idx)[0]["file_name"] : cocoDt_density.loadImgs(idx)[0]["id"] for idx in range(1, len(dens_list) + 1)}    
     assert len(crop_img_matcher) > 0, "Failed to match images"
     
-    # 遍历处理每一张Global图片
+    # 遍历处理每一张原始图片 global 全局检测
     for img_id in tqdm(cocoGt_global.getImgIds(), total=len(img_list)):
         # DO NOT use img/dens name to load data, there is a filepath error
         # start by dealing with global detection result
@@ -117,8 +116,9 @@ if __name__ == "__main__":
         matched_dens_file = {filename for filename in dens_list if img_name in filename}
         # 'id' from image json
         # why i + 1 ?
+        # 这里应该不用再 +1 了
         global_annIds = cocoDt_global.getAnnIds(imgIds=global_img[0]['id'],
-                                                catIds=[i + 1 for i in range(len(classList))], iscrowd=None)
+                                                catIds=[i for i in range(len(classList))], iscrowd=None)
         # global_annIds might be empty, if you use subset to train expert model. So we do not check
         # the length here.
         current_global_img_bbox = cocoDt_global.loadAnns(global_annIds)

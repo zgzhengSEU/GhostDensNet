@@ -683,6 +683,27 @@ def ghostnetv2(model_name, USEGhostDensNet=False, **kwargs):
                 [5, 720, 160, True, 'relu', 1],
                 [5, 960, 320, True, 'relu', 1],
                 [5, 960, 320, True, 'relu', 1]]
+        },
+        
+        "GDNetmulti":{
+            "cfg": [
+                # stem: 3 -> 16, s = 2
+                # k, exp, c,  se,     nl,  s,
+                # stage1
+                [3, 16, 16, False, 'relu', 1],
+                # stage2
+                [3, 48, 24, False, 'relu', 2],
+                [3, 72, 24, False, 'relu', 1],
+                # stage3
+                [5, 72, 40, True, 'relu', 1],
+                [5, 120, 40, True, 'relu', 1],
+                # stage4
+                [3, 240, 80, False, 'relu', 2],
+                [3, 320, 80, False, 'relu', 1],
+                [3, 480, 112, True, 'relu', 1],
+                [5, 720, 112, True, 'relu', 1],
+                [5, 960, 160, True, 'relu', 1],
+                [5, 960, 160, True, 'relu', 1]]
         }
     }
     if USEGhostDensNet == True:
@@ -695,7 +716,7 @@ ghostnetv2_nose_1x = partial(ghostnetv2, model_name="nose_1x", final_drop=0.8)
 GDNet = partial(ghostnetv2, model_name="GDNet", USEGhostDensNet=True)
 
 if __name__=='__main__':
-    model = GDNet()
+    model = ghostnetv2_1x()
     model.eval()
     print(model)
     showstat = True

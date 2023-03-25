@@ -1,10 +1,10 @@
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
-import mmcv
 import itertools
 from terminaltables import AsciiTable
 import numpy as np
-
+from mmengine.fileio import dump
+from mmengine.utils import is_str
 
 def resize_bbox_to_original(bboxs, start_x, start_y):
     """
@@ -102,7 +102,7 @@ def results2json(json_results, out_file):
     result_files = dict()
     result_files['bbox'] = '{}.{}.json'.format(out_file, 'bbox')
     result_files['proposal'] = '{}.{}.json'.format(out_file, 'bbox')
-    mmcv.dump(json_results, result_files['bbox'])
+    dump(json_results, result_files['bbox'])
 
 
 def coco_eval(result_files,
@@ -127,7 +127,7 @@ def coco_eval(result_files,
     # borrow from mcnn
     # coco file -> cocoGt_global
     # re-load fusion result ,instead of cocoDt
-    if mmcv.is_str(coco):
+    if is_str(coco):
         coco = COCO(coco)
     assert isinstance(coco, COCO)
 

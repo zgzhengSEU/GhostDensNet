@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument('--threshold', type=float, default=0.08 ,help='Threshold defined to select the cropped region')
     parser.add_argument('--image_prefix', default=".jpg", help='the path to save precomputed distance')
     parser.add_argument('--output_folder', default="crop", help='The dir to save generated images and annotations')
-    parser.add_argument('--mode', default="train", help='Indicate if you are working on train/val/test set')
+    parser.add_argument('--mode', default="test", help='Indicate if you are working on train/val/test set')
     parser.add_argument('--overlay_map_output_dir', default="overlay_map", help='The dir to save overlay_map_output_dir')
     args = parser.parse_args()
     return args

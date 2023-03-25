@@ -55,7 +55,9 @@ def overlay_func(img_pth, raw_anns, classList, truncate_threshold, exclude_regio
                 # then coord not follows into format required. So we drop this bbox
                 continue
 
-        text = classList[class_id-1]
+        # text = classList[class_id-1]
+        # 生成的json已经处理了id - 1 了
+        text = classList[class_id]
         anns.append(bbox)
         if show:
             cp_I = cv2.rectangle(cp_I, (int(bbox_left), int(bbox_top)), (int(bbox_right), int(bbox_bottom)),
@@ -75,8 +77,9 @@ def overlay_func(img_pth, raw_anns, classList, truncate_threshold, exclude_regio
                                      (0, 255, 255), thickness=2)
                 cv2.putText(cp_I, text, (int(coord[0]), int(coord[1])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255),
                             lineType=cv2.LINE_AA)
-        cv2.imshow("overlay_image", cp_I)
-        cv2.waitKey(0)
+        # cv2.imshow("overlay_image", cp_I)
+        cv2.imwrite('temp.jpg', cp_I)
+        # cv2.waitKey(0)
     return anns
 
 
@@ -95,8 +98,9 @@ def overlay_bbox_img(coco, img_dir, img_id, truncate_threshold, show):
                  "bus", "motor"]
     img = coco.loadImgs(img_id)
     img_pth = os.path.join(img_dir, img[0]["file_name"])
+    # 不用 catids = i + 1，不用 + 1
     annIds = coco.getAnnIds(imgIds=img[0]['id'], catIds=[
-                            i+1 for i in range(len(classList))], iscrowd=None)
+                            i for i in range(len(classList))], iscrowd=None)
     raw_anns = coco.loadAnns(annIds)
     anns = overlay_func(img_pth, raw_anns, classList,
                         truncate_threshold, None, show=show)

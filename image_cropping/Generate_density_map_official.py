@@ -290,7 +290,7 @@ def parse_args():
                         help='the path to save precomputed distance')
     parser.add_argument('--image_prefix', default=".jpg",
                         help='image filesuffix')
-    parser.add_argument('--mode', default="train",
+    parser.add_argument('--mode', default="test",
                         help='Indicate if you are working on train/val/test set')
     parser.add_argument('--showden', type=bool, default=False, help='show results')
     args = parser.parse_args()
