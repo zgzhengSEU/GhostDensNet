@@ -634,10 +634,10 @@ class GhostDensNetFPN(nn.Module):
                 [3, 200, 80, False, 'relu', 1],
                 [3, 184, 80, False, 'relu', 1],
                 [3, 184, 80, False, 'relu', 1],
-                [3, 480, 112, True, 'relu', 1],
-                [3, 672, 112, True, 'relu', 1]],
+                [3, 480, 120, True, 'relu', 1],
+                [3, 720, 120, True, 'relu', 1]],
                 # stage4
-                [[5, 672, 160, True, 'relu', 2],
+                [[5, 720, 160, True, 'relu', 2],
                 [5, 960, 160, False, 'relu', 1],
                 [5, 960, 160, True, 'relu', 1],
                 [5, 960, 160, False, 'relu', 1],
@@ -681,16 +681,16 @@ class GhostDensNetFPN(nn.Module):
             
         self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
         # backend
-        self.backend_feat_p2 = [40, 40]
-        self.backend_feat_p3 = [112, 112]
-        self.backend_feat_p4 = [160, 160]
+        self.backend_feat_p2 = [40, 40, 40]
+        self.backend_feat_p3 = [120, 120, 120]
+        self.backend_feat_p4 = [160, 160, 160]
         self.backend_p2 = make_backend_layers(
             self.backend_feat_p2, in_channels=_make_divisible(multiplier * self.cfgs[1][-1][2]), dilation=True)
         self.backend_p3 = make_backend_layers(
             self.backend_feat_p3, in_channels=_make_divisible(multiplier * self.cfgs[2][-1][2]), dilation=True)
         self.backend_p4 = make_backend_layers(
             self.backend_feat_p4, in_channels=_make_divisible(multiplier * self.cfgs[3][-1][2]), dilation=True)
-        self.output_layer = nn.Conv2d(312, 1, kernel_size=1)
+        self.output_layer = nn.Sequential(nn.Conv2d(320, 160, kernel_size=1), nn.Conv2d(160, 1, kernel_size=1))
         
         self._initialize_weights()
 
@@ -842,13 +842,13 @@ ghostnetv2_nose_1x = partial(ghostnetv2, model_name="nose_1x", final_drop=0.8)
 GDNet = partial(ghostnetv2, model_name="GDNet", USEGhostDensNet=True)
 
 if __name__=='__main__':
-    model = GhostDensNetFPN()
+    input_img = torch.ones((1, 3, 1920, 1080)).to('cuda')
+    model = GhostDensNetFPN().to('cuda')
     model.eval()
-    print(model)
+    out = model(input_img)
+    print(out.shape)
+    # print(model)
     showstat = True
     if showstat:
         from torchstat import stat
-        stat(model, (3, 1920, 1080))
-    input = torch.randn(1,3,1920,1080)
-    y = model(input)
-    print(y.size())
+        stat(model, (3, 1920,1080))

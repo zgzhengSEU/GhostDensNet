@@ -1,17 +1,18 @@
 import numpy as np
 import scipy
 import scipy.io as io
-from scipy.ndimage.filters import gaussian_filter
+from scipy.ndimage import gaussian_filter
 import os
 import glob
 from matplotlib import pyplot as plt
 import h5py
 import PIL.Image as Image
 from matplotlib import cm as CM
+from tqdm import tqdm
+import sys
 
-
-#partly borrowed from https://github.com/davideverona/deep-crowd-counting_crowdnet
-def gaussian_filter_density(img,points):
+# partly borrowed from https://github.com/davideverona/deep-crowd-counting_crowdnet
+def gaussian_filter_density(img, points):
     '''
     This code use k-nearst, will take one minute or more to generate a density-map with one thousand people.
 
@@ -25,8 +26,9 @@ def gaussian_filter_density(img,points):
     points: three pedestrians with annotation:[[163,53],[175,64],[189,74]].
     img_shape: (768,1024) 768 is row and 1024 is column.
     '''
-    img_shape=[img.shape[0],img.shape[1]]
-    print("Shape of current image: ",img_shape,". Totally need generate ",len(points),"gaussian kernels.")
+    img_shape = [img.shape[0], img.shape[1]]
+    print("Shape of current image: ", img_shape,
+          ". Totally need generate ", len(points), "gaussian kernels.")
     density = np.zeros(img_shape, dtype=np.float32)
     gt_count = len(points)
     if gt_count == 0:
@@ -38,50 +40,55 @@ def gaussian_filter_density(img,points):
     # query kdtree
     distances, locations = tree.query(points, k=4)
 
-    print ('generate density...')
+    print('generate density...')
     for i, pt in enumerate(points):
         pt2d = np.zeros(img_shape, dtype=np.float32)
-        if int(pt[1])<img_shape[0] and int(pt[0])<img_shape[1]:
-            pt2d[int(pt[1]),int(pt[0])] = 1.
+        if int(pt[1]) < img_shape[0] and int(pt[0]) < img_shape[1]:
+            pt2d[int(pt[1]), int(pt[0])] = 1.
         else:
             continue
         if gt_count > 1:
             sigma = (distances[i][1]+distances[i][2]+distances[i][3])*0.1
         else:
-            sigma = np.average(np.array(gt.shape))/2./2. #case: 1 point
-        density += scipy.ndimage.filters.gaussian_filter(pt2d, sigma, mode='constant')
-    print ('done.')
+            sigma = np.average(np.array(img.shape))/2./2.  # case: 1 point
+            print('case: 1 point, this code may be error')
+        density += gaussian_filter(
+            pt2d, sigma, mode='constant')
+    print('done.')
     return density
 
 
 # test code
-if __name__=="__main__":
+if __name__ == "__main__":
     # show an example to use function generate_density_map_with_fixed_kernel.
-    root = 'D:\\workspaceMaZhenwei\\GithubProject\\Crowd_counting_from_scratch\\data'
-    
+    root = '/home/gp.sc.cc.tohoku.ac.jp/duanct/openmmlab/GhostDensNet/data/shanghaitech/ShanghaiTech'
+
     # now generate the ShanghaiA's ground truth
-    part_A_train = os.path.join(root,'part_A_final/train_data','images')
-    part_A_test = os.path.join(root,'part_A_final/test_data','images')
+    part_A_train = os.path.join(root, 'part_B/train_data', 'images')
+    part_A_test = os.path.join(root, 'part_B/test_data', 'images')
     # part_B_train = os.path.join(root,'part_B_final/train_data','images')
     # part_B_test = os.path.join(root,'part_B_final/test_data','images')
-    path_sets = [part_A_train,part_A_test]
-    
+    path_sets = [part_A_train, part_A_test]
+
     img_paths = []
     for path in path_sets:
         for img_path in glob.glob(os.path.join(path, '*.jpg')):
             img_paths.append(img_path)
-    
-    for img_path in img_paths:
-        print(img_path)
-        mat = io.loadmat(img_path.replace('.jpg','.mat').replace('images','ground_truth').replace('IMG_','GT_IMG_'))
-        img= plt.imread(img_path)#768行*1024列
-        k = np.zeros((img.shape[0],img.shape[1]))
-        points = mat["image_info"][0,0][0,0][0] #1546person*2(col,row)
-        k = gaussian_filter_density(img,points)
+
+    img_paths = tqdm(img_paths, file=sys.stdout)
+    for i, img_path in enumerate(img_paths):
+        img_paths.desc = f"[{os.path.basename(img_path)}]"
+        mat = io.loadmat(img_path.replace('.jpg', '.mat').replace(
+            'images', 'ground-truth').replace('IMG_', 'GT_IMG_'))
+        img = plt.imread(img_path)  # 768行*1024列
+        k = np.zeros((img.shape[0], img.shape[1]))
+        points = mat["image_info"][0, 0][0, 0][0]  # 1546person*2(col,row)
+        k = gaussian_filter_density(img, points)
         # plt.imshow(k,cmap=CM.jet)
         # save density_map to disk
-        np.save(img_path.replace('.jpg','.npy').replace('images','ground_truth'), k)
-    
+        np.save(img_path.replace('.jpg', '.npy').replace(
+            'images', 'ground-truth'), k)
+
     '''
     #now see a sample from ShanghaiA
     plt.imshow(Image.open(img_paths[0]))

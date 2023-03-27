@@ -4,7 +4,7 @@ import os
 from tqdm import tqdm as tqdm
 import time
 
-from model.GhostDensNet import GDNet
+from model.ghostnetv2_torch import GhostNetV2Dens
 from model.CrowdDataset import CrowdDataset
 from utils.distributed_utils import init_distributed_mode, dist, cleanup
 from utils.train_eval_utils import train_one_epoch, evaluate
@@ -17,11 +17,53 @@ import pytorch_warmup as warmup
 import wandb
 
 """
-    CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 --master_port=29600 --use_env train.py   
+    CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 --master_port=29900 --use_env train-ghostnetV2_torch.py   
     CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 --use_env train.py   
     CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 python -m torch.distributed.launch --nproc_per_node=6 --use_env train.py
 """
+from collections import OrderedDict
+def clean_state_dict(state_dict):
+    # 'clean' checkpoint by removing .module prefix from state dict if it exists from parallel training
+    cleaned_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        name = k[7:] if k.startswith('module.') else k
+        cleaned_state_dict[name] = v
+    return cleaned_state_dict   
 
+import logging
+_logger = logging.getLogger(__name__)
+
+def load_state_dict(checkpoint_path, map_location, use_ema=True):
+    if checkpoint_path and os.path.isfile(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location=map_location)
+        state_dict_key = ''
+        if isinstance(checkpoint, dict):
+            if use_ema and checkpoint.get('state_dict_ema', None) is not None:
+                state_dict_key = 'state_dict_ema'
+            elif use_ema and checkpoint.get('model_ema', None) is not None:
+                state_dict_key = 'model_ema'
+            elif 'state_dict' in checkpoint:
+                state_dict_key = 'state_dict'
+            elif 'model' in checkpoint:
+                state_dict_key = 'model'
+        state_dict = clean_state_dict(checkpoint[state_dict_key] if state_dict_key else checkpoint)
+        _logger.info("Loaded {} from checkpoint '{}'".format(state_dict_key, checkpoint_path))
+        return state_dict
+    else:
+        _logger.error("No checkpoint found at '{}'".format(checkpoint_path))
+        raise FileNotFoundError()
+
+def load_checkpoint(model, checkpoint_path, map_location='cpu', use_ema=True, strict=True):
+    if os.path.splitext(checkpoint_path)[-1].lower() in ('.npz', '.npy'):
+        # numpy checkpoint, try to load via model specific load_pretrained fn
+        if hasattr(model, 'load_pretrained'):
+            model.load_pretrained(checkpoint_path)
+        else:
+            raise NotImplementedError('Model cannot load numpy checkpoint')
+        return
+    state_dict = load_state_dict(checkpoint_path, map_location, use_ema)
+    incompatible_keys = model.load_state_dict(state_dict, strict=strict)
+    return incompatible_keys
 
 def main(args):
     if torch.cuda.is_available() is False:
@@ -70,13 +112,13 @@ def main(args):
                     mode="online",
                     resume='allow',
                     id = resume_id,
-                    name='GhostDensNet')
+                    name='GhostDensNetFPN-load')
             else:
                 wandb.init(
                     project="Density",
                     group="ShanghaiTech",
                     mode="online",
-                    name='GhostDensNet')
+                    name='GhostDensNetFPN-load')
 
     # ======================== cuda ====================================
     device = torch.device(gpu_or_cpu)
@@ -114,16 +156,8 @@ def main(args):
                                               shuffle=False)
 
     # ========================================= model ===========================
-    model = GDNet().to(device)
-    
-    if args.syncBN:
-        # 使用SyncBatchNorm后训练会更耗时
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
-        
-    # 转为DDP模型
-    model = torch.nn.parallel.DistributedDataParallel(
-        model, device_ids=[args.gpu])
-    
+    model = GhostNetV2Dens().to(device)
+  
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)
         start_epoch = resume_load_checkpoint['epoch']
@@ -145,8 +179,9 @@ def main(args):
             print(f"[Resume Train, Use Checkpoint: {resume_checkpoint}]")
 
     elif os.path.exists(init_checkpoint):
-        weights_dict = torch.load(init_checkpoint, map_location=device)
-        model.load_state_dict(weights_dict, strict=False)
+        # weights_dict = torch.load(init_checkpoint, map_location=device)
+        # model.load_state_dict(weights_dict, strict=False)
+        load_checkpoint(model, init_checkpoint, strict=False, map_location=device)
         if rank == 0:
             print(f'[rank {rank} load checkpoint from {init_checkpoint}]')
 
@@ -162,7 +197,15 @@ def main(args):
         # 这里注意，一定要指定map_location参数，否则会导致第一块GPU占用更多资源
         model.load_state_dict(torch.load(
             temp_init_checkpoint_path, map_location=device))
+
         
+    if args.syncBN:
+        # 使用SyncBatchNorm后训练会更耗时
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
+        
+    # 转为DDP模型
+    model = torch.nn.parallel.DistributedDataParallel(
+        model, device_ids=[args.gpu], find_unused_parameters=True)
     # ===================================== optimizer ===========================================
     if not resume:
         pg = [p for p in model.parameters() if p.requires_grad]
@@ -249,7 +292,7 @@ if __name__ == "__main__":
     parser.add_argument('--resume_id', type=str, default='5tpdfo8k')
     parser.add_argument('--resume_checkpoint', type=str, default='',
                         help='resume checkpoint path')
-    parser.add_argument('--init_checkpoint', type=str, default='',
+    parser.add_argument('--init_checkpoint', type=str, default='./checkpoints/ghostnetv2_torch/ck_ghostnetv2_10.pth',
                         help='initial weights path')
     # 不要改该参数，系统会自动分配
     parser.add_argument('--device', default='cuda',

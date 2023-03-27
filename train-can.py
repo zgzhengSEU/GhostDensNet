@@ -4,7 +4,7 @@ import os
 from tqdm import tqdm as tqdm
 import time
 
-from model.GhostDensNet import GDNet
+from model.CANNet import CANNet
 from model.CrowdDataset import CrowdDataset
 from utils.distributed_utils import init_distributed_mode, dist, cleanup
 from utils.train_eval_utils import train_one_epoch, evaluate
@@ -17,7 +17,7 @@ import pytorch_warmup as warmup
 import wandb
 
 """
-    CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 --master_port=29600 --use_env train.py   
+    CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 --master_port=29700 --use_env train-can.py   
     CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 --use_env train.py   
     CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 python -m torch.distributed.launch --nproc_per_node=6 --use_env train.py
 """
@@ -70,13 +70,13 @@ def main(args):
                     mode="online",
                     resume='allow',
                     id = resume_id,
-                    name='GhostDensNet')
+                    name='CANNet')
             else:
                 wandb.init(
                     project="Density",
                     group="ShanghaiTech",
                     mode="online",
-                    name='GhostDensNet')
+                    name='CANNet')
 
     # ======================== cuda ====================================
     device = torch.device(gpu_or_cpu)
@@ -114,7 +114,7 @@ def main(args):
                                               shuffle=False)
 
     # ========================================= model ===========================
-    model = GDNet().to(device)
+    model = CANNet().to(device)
     
     if args.syncBN:
         # 使用SyncBatchNorm后训练会更耗时
